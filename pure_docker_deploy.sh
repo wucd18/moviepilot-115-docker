@@ -1,198 +1,181 @@
 #!/bin/bash
-# pure-docker-deploy.sh - 纯Docker部署MoviePilot + 115网盘
+# quick-install.sh - MoviePilot + 115网盘 快速安装脚本
 
 set -e
 
 # 颜色定义
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
 RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-print_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+echo -e "${BLUE}"
+cat << 'EOF'
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║     MoviePilot + 115网盘 快速部署工具 v1.0                   ║
+║                                                              ║
+║     🎬 自动下载  📁 云端播放  🚀 一键部署                    ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+echo -e "${NC}"
 
-print_header() {
-    clear
-    echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     MoviePilot + 115网盘 部署工具    ║${NC}"
-    echo -e "${BLUE}║           纯Docker版本               ║${NC}"
-    echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
-    echo
-}
+print_info() { echo -e "${GREEN}✓${NC} $1"; }
+print_step() { echo -e "${BLUE}➤${NC} $1"; }
+print_warn() { echo -e "${YELLOW}⚠${NC} $1"; }
+print_error() { echo -e "${RED}✗${NC} $1"; }
 
-# 检查系统要求
-check_requirements() {
-    print_step "检查系统要求..."
+# 检查系统
+check_system() {
+    print_step "检查系统环境..."
+    
+    # 检查操作系统
+    if [[ ! -f /etc/os-release ]]; then
+        print_error "不支持的操作系统"
+        exit 1
+    fi
+    
+    . /etc/os-release
+    print_info "操作系统: $PRETTY_NAME"
+    
+    # 检查架构
+    ARCH=$(uname -m)
+    if [[ ! "$ARCH" =~ ^(x86_64|amd64|arm64|aarch64)$ ]]; then
+        print_error "不支持的架构: $ARCH"
+        exit 1
+    fi
+    print_info "系统架构: $ARCH"
     
     # 检查Docker
-    if ! command -v docker &> /dev/null; then
-        print_error "Docker未安装!"
-        echo "安装命令:"
-        echo "Ubuntu/Debian: curl -fsSL https://get.docker.com | sh"
-        echo "CentOS/RHEL: curl -fsSL https://get.docker.com | sh"
-        exit 1
+    if ! command -v docker >/dev/null 2>&1; then
+        print_warn "Docker未安装，正在安装..."
+        install_docker
+    else
+        print_info "Docker已安装: $(docker --version | cut -d' ' -f3 | tr -d ',')"
     fi
     
     # 检查Docker服务
-    if ! docker info &> /dev/null; then
-        print_error "Docker服务未启动!"
-        echo "启动命令: sudo systemctl start docker"
-        exit 1
+    if ! systemctl is-active --quiet docker; then
+        print_step "启动Docker服务..."
+        sudo systemctl start docker
+        sudo systemctl enable docker
     fi
     
-    # 检查权限
-    if ! docker ps &> /dev/null; then
-        print_warning "当前用户无Docker权限，将使用sudo"
-        DOCKER_CMD="sudo docker"
+    # 检查Docker权限
+    if ! docker ps >/dev/null 2>&1; then
+        if groups $USER | grep -q docker; then
+            print_warn "Docker权限配置中，需要重新登录生效"
+            DOCKER_CMD="sudo docker"
+        else
+            print_step "配置Docker权限..."
+            sudo usermod -aG docker $USER
+            print_warn "Docker权限已配置，本次运行使用sudo"
+            DOCKER_CMD="sudo docker"
+        fi
     else
         DOCKER_CMD="docker"
     fi
-    
-    print_info "系统检查完成 ✓"
 }
 
-# 创建网络
-create_network() {
-    print_step "创建Docker网络..."
-    
-    NETWORK_NAME="moviepilot-net"
-    
-    # 检查网络是否存在
-    if $DOCKER_CMD network ls | grep -q "$NETWORK_NAME"; then
-        print_warning "网络 $NETWORK_NAME 已存在，跳过创建"
+# 安装Docker
+install_docker() {
+    if command -v apt-get >/dev/null 2>&1; then
+        # Ubuntu/Debian
+        curl -fsSL https://get.docker.com | sudo sh
+    elif command -v yum >/dev/null 2>&1; then
+        # CentOS/RHEL
+        curl -fsSL https://get.docker.com | sudo sh
     else
-        $DOCKER_CMD network create "$NETWORK_NAME"
-        print_info "网络创建完成 ✓"
+        print_error "不支持的包管理器，请手动安装Docker"
+        exit 1
     fi
 }
 
-# 创建目录结构
-create_directories() {
-    print_step "创建目录结构..."
+# 获取配置
+get_config() {
+    print_step "配置部署参数..."
     
-    BASE_DIR="$HOME/moviepilot-115"
+    # 自动检测IP
+    SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "127.0.0.1")
     
-    if [ -d "$BASE_DIR" ]; then
-        print_warning "目录 $BASE_DIR 已存在"
-        read -p "是否删除并重新创建? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$BASE_DIR"
-        else
-            print_error "部署已取消"
-            exit 1
-        fi
-    fi
-    
-    mkdir -p "$BASE_DIR"
-    cd "$BASE_DIR"
-    
-    # 创建数据目录
-    mkdir -p {config/{clash,qbit,emby,moviepilot},data/{downloads,media/{movies,tv,anime}},cache}
-    
-    print_info "目录创建完成: $BASE_DIR ✓"
-}
-
-# 收集配置信息
-collect_config() {
-    print_step "收集配置信息..."
-    
-    # 基础配置
-    echo "=== 基础配置 ==="
-    read -p "qBittorrent用户名 [admin]: " QB_USER
-    QB_USER=${QB_USER:-admin}
-    
-    read -s -p "qBittorrent密码 [admin123]: " QB_PASS
-    QB_PASS=${QB_PASS:-admin123}
-    echo
-    
-    # 获取服务器IP
-    DEFAULT_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}' 2>/dev/null || echo "127.0.0.1")
-    read -p "服务器IP [$DEFAULT_IP]: " SERVER_IP
-    SERVER_IP=${SERVER_IP:-$DEFAULT_IP}
-    
-    read -p "MoviePilot超级用户 [admin]: " MP_USER
-    MP_USER=${MP_USER:-admin}
-    
-    # PT站配置
-    echo
-    echo "=== PT站配置 (可稍后在WebUI中配置) ==="
-    read -p "认证站点 (如leaves): " AUTH_SITE
-    read -p "用户UID: " LEAVES_UID
-    read -p "PassKey: " LEAVES_PASSKEY
-    read -p "GitHub Token: " GITHUB_TOKEN
-    
-    # 代理配置
-    echo
-    echo "=== 代理配置 (海外VPS访问115网盘必需) ==="
-    read -p "是否需要代理? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        NEED_PROXY=true
-        read -p "代理类型 [ss]: " PROXY_TYPE
-        PROXY_TYPE=${PROXY_TYPE:-ss}
-        read -p "代理服务器: " PROXY_SERVER
-        read -p "代理端口 [443]: " PROXY_PORT
-        PROXY_PORT=${PROXY_PORT:-443}
-        read -p "加密方式 [aes-256-gcm]: " PROXY_CIPHER
-        PROXY_CIPHER=${PROXY_CIPHER:-aes-256-gcm}
-        read -s -p "代理密码: " PROXY_PASS
-        echo
+    # 检查网络环境
+    if curl -s --connect-timeout 3 https://www.baidu.com >/dev/null 2>&1; then
+        LOCATION="domestic"
+        print_info "检测到国内网络环境"
     else
-        NEED_PROXY=false
+        LOCATION="overseas" 
+        print_warn "检测到海外网络环境，建议配置代理"
     fi
     
-    # 端口配置
+    # 检查端口可用性
+    get_available_port() {
+        local port=$1
+        while ss -tlnp 2>/dev/null | grep -q ":$port " || netstat -tlnp 2>/dev/null | grep -q ":$port "; do
+            ((port++))
+        done
+        echo $port
+    }
+    
+    MP_PORT=$(get_available_port 3000)
+    QB_PORT=$(get_available_port 8080)
+    EMBY_PORT=$(get_available_port 8096)
+    
+    # 默认配置
+    QB_USER="admin"
+    QB_PASS="admin123"
+    MP_USER="admin"
+    
+    print_info "使用配置:"
+    echo "  服务器IP: $SERVER_IP"
+    echo "  MoviePilot: http://$SERVER_IP:$MP_PORT"
+    echo "  qBittorrent: http://$SERVER_IP:$QB_PORT (admin/admin123)"
+    echo "  Emby: http://$SERVER_IP:$EMBY_PORT"
     echo
-    echo "=== 端口配置 ==="
-    read -p "MoviePilot端口 [3000]: " MP_PORT
-    MP_PORT=${MP_PORT:-3000}
-    
-    read -p "qBittorrent端口 [8080]: " QB_PORT
-    QB_PORT=${QB_PORT:-8080}
-    
-    read -p "Emby端口 [8096]: " EMBY_PORT
-    EMBY_PORT=${EMBY_PORT:-8096}
-    
-    if [ "$NEED_PROXY" = true ]; then
-        read -p "Clash代理端口 [7890]: " CLASH_PORT
-        CLASH_PORT=${CLASH_PORT:-7890}
-    fi
-    
-    print_info "配置收集完成 ✓"
 }
 
-# 生成配置文件
-generate_configs() {
-    print_step "生成配置文件..."
+# 创建目录和配置
+setup_environment() {
+    print_step "创建运行环境..."
     
-    # Clash配置 (如果需要代理)
-    if [ "$NEED_PROXY" = true ]; then
-        cat > config/clash/config.yaml << EOF
+    # 创建工作目录
+    WORK_DIR="$HOME/moviepilot-115"
+    if [[ -d "$WORK_DIR" ]]; then
+        print_warn "目录已存在，将清理重建"
+        rm -rf "$WORK_DIR"
+    fi
+    
+    mkdir -p "$WORK_DIR"
+    cd "$WORK_DIR"
+    
+    # 创建子目录
+    mkdir -p {config/{qbit,emby,moviepilot},downloads,media/{movies,tv,anime},cache}
+    
+    # 如果是海外环境，创建代理配置
+    if [[ "$LOCATION" = "overseas" ]]; then
+        mkdir -p config/clash
+        cat > config/clash/config.yaml << 'EOF'
 mixed-port: 7890
 allow-lan: true
 mode: Rule
 log-level: info
 external-controller: "0.0.0.0:9090"
-bind-address: "0.0.0.0"
 
+# 请根据您的代理配置修改以下部分
 proxies:
-  - name: "proxy"
-    type: $PROXY_TYPE
-    server: $PROXY_SERVER
-    port: $PROXY_PORT
-    cipher: $PROXY_CIPHER
-    password: $PROXY_PASS
+  - name: "proxy-example" 
+    type: ss
+    server: your-proxy-server.com
+    port: 443
+    cipher: aes-256-gcm
+    password: your-password
 
 proxy-groups:
   - name: PROXY
     type: select
     proxies:
-      - proxy
+      - proxy-example
       - DIRECT
 
 rules:
@@ -201,393 +184,256 @@ rules:
   - GEOIP,CN,DIRECT
   - MATCH,PROXY
 EOF
-    fi
-    
-    # proxychains配置
-    cat > config/proxychains.conf << 'EOF'
+
+        cat > config/proxychains.conf << 'EOF'
 strict_chain
 proxy_dns
-remote_dns_subnet 224
-tcp_read_time_out 15000
-tcp_connect_time_out 8000
-
-localnet 127.0.0.0/8
-localnet 10.0.0.0/8
-localnet 172.16.0.0/12
-localnet 192.168.0.0/16
-
 [ProxyList]
-http clash 7890
+http 127.0.0.1 7890
 EOF
-
-    # MoviePilot启动脚本
-    cat > config/moviepilot-start.sh << 'EOF'
-#!/bin/sh
-echo "启动MoviePilot..."
-
-# 等待其他服务启动
-sleep 15
-
-# 检查是否需要代理
-if [ "$USE_PROXY" = "true" ] && nc -z clash 7890; then
-    echo "使用代理启动MoviePilot"
-    exec proxychains4 -f /config/proxychains.conf /entrypoint.sh "$@"
-else
-    echo "直接启动MoviePilot"
-    exec /entrypoint.sh "$@"
-fi
-EOF
-    chmod +x config/moviepilot-start.sh
-    
-    # 生成环境变量文件
-    cat > .env << EOF
-# 基础配置
-QB_USER=$QB_USER
-QB_PASS=$QB_PASS
-SERVER_IP=$SERVER_IP
-MP_USER=$MP_USER
-
-# PT站配置
-AUTH_SITE=$AUTH_SITE
-LEAVES_UID=$LEAVES_UID
-LEAVES_PASSKEY=$LEAVES_PASSKEY
-GITHUB_TOKEN=$GITHUB_TOKEN
-
-# 代理配置
-NEED_PROXY=$NEED_PROXY
-
-# 端口配置
-MP_PORT=$MP_PORT
-QB_PORT=$QB_PORT
-EMBY_PORT=$EMBY_PORT
-CLASH_PORT=${CLASH_PORT:-7890}
-
-# 目录配置
-BASE_DIR=$BASE_DIR
-EOF
-    
-    print_info "配置文件生成完成 ✓"
-}
-
-# 启动Clash代理 (如果需要)
-start_clash() {
-    if [ "$NEED_PROXY" = true ]; then
-        print_step "启动Clash代理..."
-        
-        $DOCKER_CMD run -d \
-            --name moviepilot-clash \
-            --network moviepilot-net \
-            --restart unless-stopped \
-            -p $CLASH_PORT:7890 \
-            -p 9090:9090 \
-            -v "$BASE_DIR/config/clash:/root/.config/clash" \
-            dreamacro/clash:latest
-        
-        print_info "Clash代理启动完成 ✓"
-        
-        # 等待代理启动
-        sleep 10
     fi
+    
+    print_info "环境创建完成: $WORK_DIR"
 }
 
-# 启动qBittorrent
-start_qbittorrent() {
-    print_step "启动qBittorrent..."
+# 启动服务
+deploy_services() {
+    print_step "部署服务中..."
     
+    # 创建网络
+    $DOCKER_CMD network create moviepilot-net 2>/dev/null || true
+    
+    # 1. 启动qBittorrent
+    print_step "启动qBittorrent..."
     $DOCKER_CMD run -d \
         --name moviepilot-qbit \
         --network moviepilot-net \
         --restart unless-stopped \
-        -e PUID=0 \
-        -e PGID=0 \
-        -e TZ=Asia/Shanghai \
-        -e WEBUI_PORT=8080 \
-        -e TORRENTING_PORT=32156 \
-        -e QB_USERNAME="$QB_USER" \
-        -e QB_PASSWORD="$QB_PASS" \
-        -p $QB_PORT:8080 \
-        -p 32156:32156 \
-        -v "$BASE_DIR/config/qbit:/config" \
-        -v "$BASE_DIR/data/downloads:/downloads" \
-        -v "$BASE_DIR/data/media:/media" \
-        linuxserver/qbittorrent:4.6.5
+        -e PUID=0 -e PGID=0 -e TZ=Asia/Shanghai \
+        -e WEBUI_PORT=8080 -e TORRENTING_PORT=32156 \
+        -e QB_USERNAME="$QB_USER" -e QB_PASSWORD="$QB_PASS" \
+        -p $QB_PORT:8080 -p 32156:32156 \
+        -v "$PWD/config/qbit:/config" \
+        -v "$PWD/downloads:/downloads" \
+        -v "$PWD/media:/media" \
+        linuxserver/qbittorrent:4.6.5 >/dev/null
     
-    print_info "qBittorrent启动完成 ✓"
-}
-
-# 启动Emby
-start_emby() {
+    # 2. 启动Emby
     print_step "启动Emby媒体服务器..."
-    
     $DOCKER_CMD run -d \
         --name moviepilot-emby \
         --network moviepilot-net \
         --restart unless-stopped \
-        -e PUID=0 \
-        -e PGID=0 \
-        -e GIDLIST=0 \
-        -e TZ=Asia/Shanghai \
+        -e PUID=0 -e PGID=0 -e TZ=Asia/Shanghai \
         -e EMBY_PublishedServerUrl="$SERVER_IP" \
-        -p $EMBY_PORT:8096 \
-        -p 8920:8920 \
-        -p 7359:7359/udp \
-        -p 1900:1900/udp \
-        -v "$BASE_DIR/config/emby:/config" \
-        -v "$BASE_DIR/data/media:/media" \
+        -p $EMBY_PORT:8096 -p 8920:8920 \
+        -v "$PWD/config/emby:/config" \
+        -v "$PWD/media:/media" \
         --privileged \
-        amilys/embyserver:latest
+        amilys/embyserver:latest >/dev/null
     
-    print_info "Emby启动完成 ✓"
-}
-
-# 构建并启动MoviePilot
-start_moviepilot() {
-    print_step "构建并启动MoviePilot..."
+    # 3. 启动代理(如果是海外)
+    if [[ "$LOCATION" = "overseas" ]]; then
+        print_step "启动Clash代理..."
+        $DOCKER_CMD run -d \
+            --name moviepilot-clash \
+            --network moviepilot-net \
+            --restart unless-stopped \
+            -p 7890:7890 -p 9090:9090 \
+            -v "$PWD/config/clash:/root/.config/clash" \
+            dreamacro/clash:latest >/dev/null
+        sleep 5
+    fi
     
-    # 创建临时Dockerfile
-    cat > Dockerfile.temp << EOF
+    # 4. 构建并启动MoviePilot
+    print_step "构建MoviePilot镜像..."
+    
+    # 创建Dockerfile
+    cat > Dockerfile << 'EOF'
 FROM jxxghp/moviepilot-v2:latest
 
 USER root
-RUN apt-get update && \\
-    apt-get install -y proxychains-ng curl netcat-openbsd && \\
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
-COPY config/moviepilot-start.sh /moviepilot-start.sh
-COPY config/proxychains.conf /config/proxychains.conf
-RUN chmod +x /moviepilot-start.sh
+COPY start-mp.sh /start-mp.sh
+RUN chmod +x /start-mp.sh
 
-ENTRYPOINT ["/moviepilot-start.sh"]
+ENTRYPOINT ["/start-mp.sh"]
 EOF
 
-    # 构建镜像
-    $DOCKER_CMD build -f Dockerfile.temp -t moviepilot-custom .
+    # 创建启动脚本
+    cat > start-mp.sh << 'EOF'
+#!/bin/sh
+echo "启动MoviePilot..."
+sleep 10
+exec /entrypoint.sh "$@"
+EOF
     
-    # 启动容器
-    PROXY_ENV=""
-    if [ "$NEED_PROXY" = true ]; then
-        PROXY_ENV="-e USE_PROXY=true"
-    fi
+    $DOCKER_CMD build -t moviepilot-custom . >/dev/null 2>&1
     
+    print_step "启动MoviePilot..."
     $DOCKER_CMD run -d \
         --name moviepilot-main \
         --network moviepilot-net \
         --restart unless-stopped \
-        -e NGINX_PORT=3000 \
-        -e PORT=3001 \
-        -e PUID=0 \
-        -e PGID=0 \
-        -e UMASK=000 \
-        -e SUPERUSER="$MP_USER" \
-        -e TZ=Asia/Shanghai \
-        -e AUTH_SITE="$AUTH_SITE" \
-        -e LEAVES_UID="$LEAVES_UID" \
-        -e LEAVES_PASSKEY="$LEAVES_PASSKEY" \
-        -e GITHUB_TOKEN="$GITHUB_TOKEN" \
-        $PROXY_ENV \
-        -p $MP_PORT:3000 \
-        -p 65042:65042 \
-        -v "$BASE_DIR/config/moviepilot:/config" \
-        -v "$BASE_DIR/data/media:/media" \
-        -v "$BASE_DIR/data/downloads:/downloads" \
-        -v "$BASE_DIR/cache:/moviepilot/.cache/ms-playwright" \
+        -e NGINX_PORT=3000 -e PORT=3001 \
+        -e PUID=0 -e PGID=0 -e UMASK=000 \
+        -e SUPERUSER="$MP_USER" -e TZ=Asia/Shanghai \
+        -p $MP_PORT:3000 -p 65042:65042 \
+        -v "$PWD/config/moviepilot:/config" \
+        -v "$PWD/media:/media" -v "$PWD/downloads:/downloads" \
+        -v "$PWD/cache:/moviepilot/.cache/ms-playwright" \
         -v /var/run/docker.sock:/var/run/docker.sock:ro \
-        moviepilot-custom
+        moviepilot-custom >/dev/null
     
-    # 清理临时文件
-    rm -f Dockerfile.temp
-    
-    print_info "MoviePilot启动完成 ✓"
+    # 清理构建文件
+    rm -f Dockerfile start-mp.sh
 }
 
-# 检查服务状态
-check_services() {
-    print_step "检查服务状态..."
+# 创建管理脚本
+create_scripts() {
+    print_step "创建管理脚本..."
     
-    echo "容器状态:"
-    $DOCKER_CMD ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep moviepilot
-    
-    echo
-    echo "等待服务完全启动..."
-    sleep 30
-    
-    # 检查端口
-    if nc -z localhost $MP_PORT 2>/dev/null; then
-        print_info "MoviePilot (端口 $MP_PORT) ✓"
-    else
-        print_warning "MoviePilot (端口 $MP_PORT) 启动中..."
-    fi
-    
-    if nc -z localhost $QB_PORT 2>/dev/null; then
-        print_info "qBittorrent (端口 $QB_PORT) ✓"
-    else
-        print_warning "qBittorrent (端口 $QB_PORT) 启动中..."
-    fi
-    
-    if nc -z localhost $EMBY_PORT 2>/dev/null; then
-        print_info "Emby (端口 $EMBY_PORT) ✓"
-    else
-        print_warning "Emby (端口 $EMBY_PORT) 启动中..."
-    fi
-}
-
-# 生成管理脚本
-generate_management_scripts() {
-    print_step "生成管理脚本..."
-    
-    # 停止脚本
-    cat > stop.sh << 'EOF'
+    # 状态检查脚本
+    cat > status.sh << 'EOF'
 #!/bin/bash
-echo "停止所有MoviePilot服务..."
-docker stop moviepilot-main moviepilot-emby moviepilot-qbit 2>/dev/null
-if docker ps -a | grep -q moviepilot-clash; then
-    docker stop moviepilot-clash 2>/dev/null
-fi
-echo "服务已停止"
-EOF
-
-    # 启动脚本
-    cat > start.sh << 'EOF'
-#!/bin/bash
-echo "启动所有MoviePilot服务..."
-if docker ps -a | grep -q moviepilot-clash; then
-    docker start moviepilot-clash
-fi
-docker start moviepilot-qbit moviepilot-emby moviepilot-main
-echo "服务已启动"
+echo "=== MoviePilot服务状态 ==="
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep moviepilot
 EOF
 
     # 重启脚本
     cat > restart.sh << 'EOF'
 #!/bin/bash
-echo "重启所有MoviePilot服务..."
-./stop.sh
-sleep 5
-./start.sh
+echo "重启MoviePilot服务..."
+docker restart moviepilot-main moviepilot-emby moviepilot-qbit 2>/dev/null
+if docker ps | grep -q moviepilot-clash; then
+    docker restart moviepilot-clash 2>/dev/null
+fi
+echo "重启完成"
 EOF
 
     # 卸载脚本
     cat > uninstall.sh << 'EOF'
 #!/bin/bash
-echo "卸载MoviePilot..."
-read -p "确认删除所有容器和数据? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    docker stop moviepilot-main moviepilot-emby moviepilot-qbit 2>/dev/null
-    if docker ps -a | grep -q moviepilot-clash; then
-        docker stop moviepilot-clash 2>/dev/null
-    fi
-    docker rm moviepilot-main moviepilot-emby moviepilot-qbit 2>/dev/null
-    if docker ps -a | grep -q moviepilot-clash; then
-        docker rm moviepilot-clash 2>/dev/null
-    fi
-    docker network rm moviepilot-net 2>/dev/null
-    docker rmi moviepilot-custom 2>/dev/null
-    echo "卸载完成！数据目录保留在: $(pwd)"
-else
-    echo "取消卸载"
+echo "停止并删除所有服务..."
+docker stop moviepilot-main moviepilot-emby moviepilot-qbit 2>/dev/null || true
+if docker ps -a | grep -q moviepilot-clash; then
+    docker stop moviepilot-clash 2>/dev/null || true
 fi
-EOF
-
-    # 日志查看脚本
-    cat > logs.sh << 'EOF'
-#!/bin/bash
-SERVICE=${1:-moviepilot-main}
-echo "查看 $SERVICE 日志..."
-docker logs -f $SERVICE
+docker rm moviepilot-main moviepilot-emby moviepilot-qbit 2>/dev/null || true
+if docker ps -a | grep -q moviepilot-clash; then
+    docker rm moviepilot-clash 2>/dev/null || true
+fi
+docker network rm moviepilot-net 2>/dev/null || true
+docker rmi moviepilot-custom 2>/dev/null || true
+echo "卸载完成，数据保留在: $(pwd)"
 EOF
 
     chmod +x *.sh
-    
-    print_info "管理脚本生成完成 ✓"
 }
 
-# 显示部署结果
+# 等待服务启动
+wait_services() {
+    print_step "等待服务启动..."
+    
+    # 等待30秒
+    for i in {1..30}; do
+        echo -n "."
+        sleep 1
+    done
+    echo
+    
+    # 检查服务状态
+    check_service() {
+        local port=$1
+        local name=$2
+        if curl -s --connect-timeout 3 http://localhost:$port >/dev/null 2>&1; then
+            print_info "$name 运行正常"
+            return 0
+        else
+            print_warn "$name 仍在启动中"
+            return 1
+        fi
+    }
+    
+    check_service $MP_PORT "MoviePilot"
+    check_service $QB_PORT "qBittorrent"
+    check_service $EMBY_PORT "Emby"
+}
+
+# 显示结果
 show_result() {
     clear
-    print_header
-    echo -e "${GREEN}🎉 部署成功！${NC}"
-    echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${BLUE}📋 服务访问信息${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🎬 MoviePilot:    http://$SERVER_IP:$MP_PORT"
-    echo "⚡ qBittorrent:   http://$SERVER_IP:$QB_PORT"
-    echo "🎭 Emby:          http://$SERVER_IP:$EMBY_PORT"
-    if [ "$NEED_PROXY" = true ]; then
-        echo "🌐 Clash面板:     http://$SERVER_IP:9090"
+    echo -e "${GREEN}"
+    cat << 'EOF'
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║                    🎉 部署成功！                             ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
+    
+    echo -e "${BLUE}📱 访问地址:${NC}"
+    echo "┌────────────────────────────────────────────────────────────────┐"
+    echo "│ 🎬 MoviePilot:    http://$SERVER_IP:$MP_PORT"
+    echo "│ ⚡ qBittorrent:   http://$SERVER_IP:$QB_PORT"  
+    echo "│ 🎭 Emby:          http://$SERVER_IP:$EMBY_PORT"
+    if [[ "$LOCATION" = "overseas" ]]; then
+        echo "│ 🌐 Clash面板:     http://$SERVER_IP:9090"
     fi
+    echo "└────────────────────────────────────────────────────────────────┘"
     echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${BLUE}🔑 默认账号${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "qBittorrent: $QB_USER / $QB_PASS"
-    echo "MoviePilot:  $MP_USER (首次访问时设置密码)"
+    
+    echo -e "${BLUE}🔑 默认账号:${NC}"
+    echo "  qBittorrent: admin / admin123"
+    echo "  MoviePilot:  admin (首次访问设置密码)"
     echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${BLUE}📝 后续配置${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. 访问MoviePilot完成初始设置"
-    echo "2. 安装'115网盘STRM助手'插件"
-    echo "3. 配置115网盘Cookie"
-    echo "4. 配置MediaWrap插件"
-    echo "5. 设置媒体库路径和刮削"
+    
+    echo -e "${BLUE}📋 后续步骤:${NC}"
+    echo "  1. 访问MoviePilot完成初始化设置"
+    echo "  2. 安装'115网盘STRM助手'插件"
+    echo "  3. 配置115网盘Cookie"
+    echo "  4. 配置PT站点信息"
+    echo "  5. 设置媒体库和刮削"
     echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${BLUE}🛠️ 管理命令${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "启动服务: ./start.sh"
-    echo "停止服务: ./stop.sh"
-    echo "重启服务: ./restart.sh"
-    echo "查看日志: ./logs.sh [服务名]"
-    echo "卸载服务: ./uninstall.sh"
-    echo
-    echo "手动管理:"
-    echo "- 查看容器: docker ps | grep moviepilot"
-    echo "- 查看日志: docker logs -f moviepilot-main"
-    echo "- 进入容器: docker exec -it moviepilot-main bash"
-    echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "${YELLOW}💡 提示${NC}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "• 所有数据保存在: $BASE_DIR"
-    echo "• 如遇问题请查看容器日志排查"
-    echo "• 115网盘Cookie需要在MoviePilot中手动配置"
-    if [ "$NEED_PROXY" = true ]; then
-        echo "• 代理已配置，海外VPS应该能正常访问115网盘"
+    
+    if [[ "$LOCATION" = "overseas" ]]; then
+        echo -e "${YELLOW}⚠ 海外部署提醒:${NC}"
+        echo "  • 请编辑 config/clash/config.yaml 配置您的代理"
+        echo "  • 代理配置完成后运行: ./restart.sh"
+        echo
     fi
+    
+    echo -e "${BLUE}🛠 管理命令:${NC}"
+    echo "  ./status.sh     - 查看服务状态"
+    echo "  ./restart.sh    - 重启所有服务"  
+    echo "  ./uninstall.sh  - 卸载所有服务"
     echo
-}
-
-# 错误处理
-cleanup_on_error() {
-    print_error "部署过程中发生错误，正在清理..."
-    $DOCKER_CMD stop moviepilot-main moviepilot-emby moviepilot-qbit moviepilot-clash 2>/dev/null || true
-    $DOCKER_CMD rm moviepilot-main moviepilot-emby moviepilot-qbit moviepilot-clash 2>/dev/null || true
-    exit 1
+    
+    echo -e "${GREEN}部署完成！现在可以开始使用MoviePilot了 🚀${NC}"
 }
 
 # 主函数
 main() {
-    trap cleanup_on_error ERR
+    # 检查权限
+    if [[ $EUID -eq 0 ]]; then
+        print_error "请不要使用root用户运行此脚本"
+        exit 1
+    fi
     
-    print_header
-    check_requirements
-    create_network
-    create_directories
-    collect_config
-    generate_configs
-    
-    # 按顺序启动服务
-    start_clash
-    start_qbittorrent
-    start_emby
-    start_moviepilot
-    
-    check_services
-    generate_management_scripts
+    # 执行部署
+    check_system
+    get_config
+    setup_environment
+    deploy_services
+    create_scripts
+    wait_services
     show_result
 }
 
-# 执行主函数
+# 错误处理
+trap 'print_error "部署失败!"; exit 1' ERR
+
+# 运行主函数
 main "$@"
