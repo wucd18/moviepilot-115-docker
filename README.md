@@ -21,7 +21,7 @@
 ### 方式一：直接运行（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/moviepilot-115-docker/main/pure-docker-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/refs/heads/main/pure_docker_deploy.sh | bash
 ```
 
 ### 方式二：下载后运行
