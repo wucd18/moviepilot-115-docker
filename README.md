@@ -15,7 +15,7 @@
 
 curl -fsSL https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/refs/heads/main/quick_deploy.sh | bash
 
-#方式二：Git克隆部署
+方式二：Git克隆部署
 ## 克隆仓库
 git clone https://github.com/wucd18/moviepilot-115-docker.git
 cd moviepilot-115-docker
