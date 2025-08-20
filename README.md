@@ -13,7 +13,7 @@
 
 🚀 快速开始
 
-curl -fsSL https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/main/quick-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/refs/heads/main/quick_deploy.sh | bash
 
 #方式二：Git克隆部署
 ## 克隆仓库
