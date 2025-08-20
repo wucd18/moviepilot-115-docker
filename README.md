@@ -12,19 +12,20 @@
 🔧 一键部署: 无需复杂配置，几分钟完成部署
 
 🚀 快速开始
+
 curl -fsSL https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/main/quick-deploy.sh | bash
 
-方式二：Git克隆部署
-# 克隆仓库
+#方式二：Git克隆部署
+## 克隆仓库
 git clone https://github.com/wucd18/moviepilot-115-docker.git
 cd moviepilot-115-docker
 
-# 运行部署脚本
+## 运行部署脚本
 chmod +x quick-deploy.sh
 ./quick-deploy.sh
 
-方式三：手动部署
-# 下载配置文件
+#方式三：手动部署
+## 下载配置文件
 wget https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/main/docker-compose.yml
 wget https://raw.githubusercontent.com/wucd18/moviepilot-115-docker/main/.env.example
 
